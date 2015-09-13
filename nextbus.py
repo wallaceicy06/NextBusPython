@@ -3,6 +3,8 @@ import xml.etree.ElementTree as ET
 
 BASE_URL = "http://webservices.nextbus.com/service/publicXMLFeed"
 
+JAVA_TF_TO_PYTHON_TF = { 'true': True, 'false': False }
+
 def get_agencies():
     res_agencies = requests.get(BASE_URL, {'command': 'agencyList'})
 
@@ -52,16 +54,13 @@ class Agency:
 
         route_cfg = route_cfg_tree[0]
 
-        if not route_cfg:
-            raise Exception('Error retrieving route config.')
-
         for c in route_cfg:
             att = c.attrib
 
             if c.tag == 'stop':
                 # required info
                 stop_data = { 'lat': att['lat'], 'lon': att['lon'], 
-                  'title': att['title'], 'stopId': att['stopId'] }
+                  'title': att['title'] }
 
                 # optional info
                 if 'stopId' in att:
@@ -87,3 +86,72 @@ class Agency:
                 route_cfg_dict['directions'][att['tag']] = direction_data
 
         return route_cfg_dict
+
+    def predictions(self, stop_id, route_id=None):
+        req_params = { 'a': self.agency, 'command': 'predictions',
+          'stopId': stop_id }
+
+        # add the optional parameter if present
+        if route_id:
+            req_params['routeTag'] = route_id
+
+        res_predictions = requests.get(BASE_URL, req_params)
+
+        predictions_tree = ET.fromstring(res_predictions.text)
+
+        predictions_dict = {}
+
+        # iterate over all route predictions at this stop
+        for predictions in predictions_tree:
+            pred_line_dict = { 'directions': {}, 'messages': [] }
+
+            # iterate over all directions/messages for this line
+            for pred_info in predictions:
+                att = pred_info.attrib
+
+                if pred_info.tag == 'direction':
+                    pred_dir_list = []
+
+                    for p in pred_info:
+                        p_att = p.attrib
+
+                        p_dict = { 'epochTime': p_att['epochTime'],
+                                   'seconds': p_att['seconds'],
+                                   'minutes': p_att['minutes'],
+                                   'isDeparture': p_att['isDeparture'],
+                                   'dirTag': p_att['dirTag'],
+                                   'tripTag': p_att['tripTag'],
+                                   'affectedByLayover': False,
+                                   'isScheduleBased': False,
+                                   'isDelayed': False }
+
+                        # optional info
+
+                        if 'affectedByLayover' in p_att:
+                            p_dict['affectedByLayover'] = \
+                              JAVA_TF_TO_PYTHON_TF[p_att['affectedByLayover']]
+
+                        if 'isScheduleBased' in p_att:
+                            p_dict['isScheduleBased'] = \
+                              JAVA_TF_TO_PYTHON_TF[p_att['isScheduleBased']]
+
+                        if 'isDelayed' in p_att:
+                            p_dict['isDelayed'] = \
+                              JAVA_TF_TO_PYTHON_TF[p_att['isDelayed']]
+
+                        pred_dir_list.append(p_dict)
+
+                    pred_line_dict[pred_info.attrib['title']] = pred_dir_list
+
+                elif pred_info.tag == 'message':
+                    pred_line_dict['messages'].append({
+                      'priority': att['priority'], 'text': att['text']
+                    })
+
+            predictions_dict[predictions.attrib['routeTag']] = pred_line_dict
+
+        # if specific route specified, return the only item in the dict
+        if not route_id:
+            return predictions_dict
+        else:
+            return predictions_dict[route_id]
